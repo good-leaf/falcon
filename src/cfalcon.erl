@@ -155,7 +155,7 @@ node_register() ->
         Node = atom_to_binary(node(), utf8),
         eredis_cluster:q(["SETEX", <<"falcon_", Node/binary>>, ?REDIS_NODE_EXPIRED, Node])
     catch
-        E:R  ->
+        E:R ->
             error_logger:error_msg("node_register error:~p, reason:~p", [E, R])
     end.
 
@@ -163,23 +163,26 @@ check_leader() ->
     try
         Result = eredis_cluster:qa(["KEYS", <<"falcon_*">>]),
         Node = atom_to_binary(node(), utf8),
-        <<"falcon_", Node/binary>> == lists:last(lists:sort(lists:foldl(fun(Tuple, Acc) -> {ok, L} = Tuple, Acc ++ L end, [], Result)))
+        <<"falcon_", Node/binary>> == lists:last(lists:sort(lists:foldl(fun(Tuple, Acc) -> {ok, L} = Tuple,
+            Acc ++ L end, [], Result)))
     catch
-        E:R  ->
+        E:R ->
             error_logger:error_msg("check_leader error:~p, reason:~p", [E, R]),
             false
     end.
 
--spec report(Metric::binary(), TimeStamp::integer(), Value::integer(), Tags::binary(), Step::integer()) -> any().
+-spec report(Metric :: binary(), TimeStamp :: integer(), Value :: integer(), Tags :: binary(), Step :: integer()) -> any().
 report(Metric, TimeStamp, Value, Tags, Step) ->
     Body = [
-        {metric, Metric},
-        {timestamp, TimeStamp},
-        {counterType, <<"GAUGE">>},
-        {endpoint, endpoint(?ENDPOINT)},
-        {step, Step},
-        {tags, Tags},
-        {value, Value}
+        [
+            {metric, Metric},
+            {timestamp, TimeStamp},
+            {counterType, <<"GAUGE">>},
+            {endpoint, endpoint(?ENDPOINT)},
+            {step, Step},
+            {tags, Tags},
+            {value, Value}
+        ]
     ],
     error_logger:info_msg("report:~p", [Body]),
     send(post, ?FALCON_URL, [], jsx:encode(Body), [{timeout, 2000}, {connect_timeout, 1000}], ?RETRY).
@@ -195,7 +198,7 @@ host_name() ->
             {ok, Host} = inet:gethostname(),
             case ?IS_SHORT_HOSTNAME of
                 true ->
-                    [SHost|_IP] = string:tokens(Host, "@"),
+                    [SHost | _IP] = string:tokens(Host, "@"),
                     application:set_env(falcon, host_name, list_to_binary(SHost));
                 false ->
                     application:set_env(falcon, host_name, list_to_binary(Host))
@@ -209,14 +212,14 @@ send(_Method, _Url, _Headers, _Body, _Options, 0) ->
     ok;
 send(Method, Url, Headers, Body, Options, Retry) ->
     case httpc:request(Method, {Url, Headers, "application/json", Body}, Options, [{body_format, binary}]) of
-        {ok, {{_Version,200, _Msg},_Server, Response}} ->
+        {ok, {{_Version, 200, _Msg}, _Server, Response}} ->
             error_logger:info_msg("send url:~p, body:~p, res_body:~p", [Url, Body, Response]);
         {ok, Result} ->
             error_logger:error_msg("send url:~p, body:~p, result:~p", [Url, Body, Result]),
-            send(Method, Url, Headers, Body, Options, Retry -1);
+            send(Method, Url, Headers, Body, Options, Retry - 1);
         {error, Error} ->
             error_logger:error_msg("send url:~p, body:~p, error:~p", [Url, Body, Error]),
-            send(Method, Url, Headers, Body, Options, Retry -1)
+            send(Method, Url, Headers, Body, Options, Retry - 1)
     end.
 
 %ReportTime 秒
