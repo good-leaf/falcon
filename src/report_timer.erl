@@ -164,8 +164,13 @@ code_change(_OldVsn, State, _Extra) ->
 timer_handle(RTime, Module, Function, Args) ->
     case cfalcon:check_leader() of
         true ->
-            {Metric, TimeStamp, Value, Tags} = Module:Function(Args),
-            cfalcon:report(Metric, TimeStamp, Value, Tags, RTime);
+            try
+                {Metric, TimeStamp, Value, Tags} = Module:Function(Args),
+                cfalcon:report(Metric, TimeStamp, Value, Tags, RTime)
+            catch
+                E:R  ->
+                    error_logger:error_msg("report error:~p, reason:~p, bt:~p", [E, R, erlang:get_stacktrace()])
+            end;
         false ->
             ignore
     end.
