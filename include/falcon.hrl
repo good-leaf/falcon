@@ -1,4 +1,4 @@
--define(ENDPOINT, application:get_env(falcon, endpoint)).
+-define(ENDPOINT, application:get_env(falcon, endpoint, undefined)).
 -define(IS_SHORT_HOSTNAME, application:get_env(falcon, short_hostname, true)).
 -define(FALCON_URL, application:get_env(falcon, falcon_url, "http://127.0.0.1:1988/v1/push")).
 -define(RETRY, application:get_env(falcon, retry, 2)).
