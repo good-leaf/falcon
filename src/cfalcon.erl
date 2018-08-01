@@ -200,7 +200,7 @@ host_name() ->
                 false ->
                     application:set_env(falcon, host_name, list_to_binary(Host))
             end,
-            application:get_env(falcon, host_name);
+            application:get_env(falcon, host_name, <<>>);
         HostName ->
             HostName
     end.
