@@ -166,7 +166,7 @@ timer_handle(#state{tserver = Name, report_time = RTime, module = Module, functi
         true ->
             try
                 {Metric, TimeStamp, Value, Tags} = Module:Function(Name, Args),
-                cfalcon:report(Metric, TimeStamp, Value, Tags, RTime)
+                cfalcon:report(Metric, TimeStamp, Value, cfalcon:generate_tags(Tags), RTime)
             catch
                 E:R  ->
                     error_logger:error_msg("report error:~p, reason:~p, bt:~p", [E, R, erlang:get_stacktrace()])
