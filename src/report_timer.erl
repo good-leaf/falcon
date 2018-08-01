@@ -83,9 +83,9 @@ init([TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs]) ->
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
     {stop, Reason :: term(), NewState :: #state{}}).
-handle_call({timer_expiry, Server}, _From, #state{report_time = RTime, module = Module, function = Fun, args = Args} = State) ->
+handle_call({timer_expiry, Server}, _From, #state{report_time = RTime} = State) ->
     error_logger:info_msg("timer_expiry for ~p~n", [State]),
-    timer_handle(RTime, Module, Fun, Args),
+    timer_handle(State),
     _TS = chronos:start_timer(State#state.tserver,
         State#state.tserver, RTime * 1000,
         {?MODULE, timer_expiry, [Server]}),
@@ -161,11 +161,11 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-timer_handle(RTime, Module, Function, Args) ->
+timer_handle(#state{tserver = Name, report_time = RTime, module = Module, function = Function, args = Args}) ->
     case cfalcon:check_leader() of
         true ->
             try
-                {Metric, TimeStamp, Value, Tags} = Module:Function(Args),
+                {Metric, TimeStamp, Value, Tags} = Module:Function(Name, Args),
                 cfalcon:report(Metric, TimeStamp, Value, Tags, RTime)
             catch
                 E:R  ->

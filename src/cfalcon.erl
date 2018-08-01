@@ -19,7 +19,8 @@
     report/5,
     check_leader/0,
     callback/1,
-    metric_register/5
+    metric_register/5,
+    generate_tags/1
 ]).
 
 -define(SERVER, ?MODULE).
@@ -250,3 +251,15 @@ to_binary(X) when is_list(X) ->
 timestamp() ->
     {M, S, _MS} = os:timestamp(),
     M * 1000000 + S.
+
+generate_tags(List) ->
+    lists:foldl(fun(T, <<>>) ->
+        {K, V} = T,
+        BK = to_binary(K),
+        BV = to_binary(V),
+        <<BK/binary, "=", BV/binary>>;
+        (T, Acc) ->
+            {K, V} = T,
+            BK = to_binary(K),
+            BV = to_binary(V),
+            <<Acc/binary, ",", BK/binary, "=", BV/binary>> end, <<>>, List).
