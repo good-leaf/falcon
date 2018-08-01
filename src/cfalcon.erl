@@ -181,6 +181,7 @@ report(Metric, TimeStamp, Value, Tags, Step) ->
         {tags, Tags},
         {value, Value}
     ],
+    error_logger:info_msg("report:~p", [Body]),
     send(post, ?FALCON_URL, [], jsx:encode(Body), [{timeout, 2000}, {connect_timeout, 1000}], ?RETRY).
 
 endpoint(undefined) ->
