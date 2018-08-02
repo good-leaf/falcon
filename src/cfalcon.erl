@@ -161,7 +161,8 @@ node_register() ->
 
 check_leader() ->
     try
-        Result = eredis_cluster:qa(["KEYS", <<"falcon_*">>]),
+        [Service, _Info] = binary:split(atom_to_binary(node(), utf8), <<"@">>),
+        Result = eredis_cluster:qa(["KEYS", <<"falcon_", Service/binary, "*">>]),
         Node = atom_to_binary(node(), utf8),
         <<"falcon_", Node/binary>> == lists:last(lists:sort(lists:foldl(fun(Tuple, Acc) -> {ok, L} = Tuple,
             Acc ++ L end, [], Result)))
