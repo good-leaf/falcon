@@ -335,12 +335,12 @@ get_key_prefix() ->
 gen_key(Key) ->
     Prefix = get_key_prefix(),
     Date = date_format(),
-    <<Prefix/binary, "_", Date/binary, "_", Key/binary>>.
+    <<Prefix/binary, "_", Key/binary, "_", Date/binary>>.
 
 gen_key(Key, TimeStamp) ->
     Prefix = get_key_prefix(),
     Date = date_format(TimeStamp),
-    <<Prefix/binary, "_", Date/binary, "_", Key/binary>>.
+    <<Prefix/binary, "_", Key/binary, "_", Date/binary>>.
 
 default_callback(Metric, Args) ->
     %前一分钟
