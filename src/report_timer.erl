@@ -2,6 +2,7 @@
 
 -behaviour(gen_server).
 
+-include("../include/falcon.hrl").
 %% API
 -export([start_link/5]).
 
@@ -14,13 +15,17 @@
     code_change/3]).
 
 -export([
-    timer_expiry/1
+    gen_key/1,
+    gen_key/2,
+    timer_expiry/1,
+    default_callback/2
 ]).
 
 -define(SERVER, ?MODULE).
 
 -record(state, {
-    tserver,
+    metric,
+    ntimer,
     report_time,
     module,
     function,
@@ -37,12 +42,11 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec(start_link(TServer::atom(), ReportTime::integer(), CallBackModule::atom(), CallBackFun::integer(), CallBackArgs::list()) ->
+-spec(start_link(Metric::binary(), ReportTime::integer(), CallBackModule::atom(), CallBackFun::integer(), CallBackArgs::list()) ->
     {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
-start_link(TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
-    Name = atom_to_binary(TServer, utf8),
-    ServerName = binary_to_atom(<<"falcon_", Name/binary>>, utf8),
-    gen_server:start_link({local, ServerName}, ?MODULE, [TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs], []).
+start_link(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
+    AtomMetric = binary_to_atom(Metric, utf8),
+    gen_server:start_link({local, AtomMetric}, ?MODULE, [Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -62,11 +66,12 @@ start_link(TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
 -spec(init(Args :: term()) ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
-init([TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs]) ->
-    {ok, _Pid} = chronos:start_link(TServer),
-    _TS = chronos:start_timer(TServer, TServer, ReportTime * 1000,
-        {?MODULE, timer_expiry, [TServer]}),
-    {ok, #state{tserver = TServer, report_time = ReportTime, module = CallBackModule, function = CallBackFun, args = CallBackArgs }}.
+init([Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs]) ->
+    NameTimer = binary_to_atom(<<"falcon_", Metric/binary>>, utf8),
+    {ok, _Pid} = chronos:start_link(NameTimer),
+    _TS = chronos:start_timer(NameTimer, NameTimer, ReportTime * 1000,
+        {?MODULE, timer_expiry, [Metric]}),
+    {ok, #state{metric = Metric, ntimer = NameTimer, report_time = ReportTime, module = CallBackModule, function = CallBackFun, args = CallBackArgs }}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -83,12 +88,12 @@ init([TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs]) ->
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
     {stop, Reason :: term(), NewState :: #state{}}).
-handle_call({timer_expiry, Server}, _From, #state{report_time = RTime} = State) ->
+handle_call({timer_expiry, Metric}, _From, #state{report_time = RTime} = State) ->
     error_logger:info_msg("timer_expiry for ~p~n", [State]),
     timer_handle(State),
-    _TS = chronos:start_timer(State#state.tserver,
-        State#state.tserver, RTime * 1000,
-        {?MODULE, timer_expiry, [Server]}),
+    _TS = chronos:start_timer(State#state.ntimer,
+        State#state.ntimer, RTime * 1000,
+        {?MODULE, timer_expiry, [Metric]}),
     {reply, ok, State};
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
@@ -104,6 +109,24 @@ handle_call(_Request, _From, State) ->
     {noreply, NewState :: #state{}} |
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: #state{}}).
+handle_cast({incr, Metric}, State) ->
+    falcon_incr(Metric),
+    {noreply, State};
+handle_cast({incr, Metric, TimeStamp}, State) ->
+    falcon_incr(Metric, TimeStamp),
+    {noreply, State};
+handle_cast({incrby, Metric, Value}, State) ->
+    falcon_incrby(Metric, Value),
+    {noreply, State};
+handle_cast({incrby, Metric, Value, TimeStamp}, State) ->
+    falcon_incrby(Metric, Value, TimeStamp),
+    {noreply, State};
+handle_cast({set, Metric, Value}, State) ->
+    falcon_set(Metric, Value),
+    {noreply, State};
+handle_cast({set, Metric, Value, TimeStamp}, State) ->
+    falcon_set(Metric, Value, TimeStamp),
+    {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -140,10 +163,10 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     ok.
 
-timer_expiry(Timer) ->
-    Name = atom_to_binary(Timer, utf8),
-    ServerName = binary_to_atom(<<"falcon_", Name/binary>>, utf8),
-    gen_server:call(whereis(ServerName), {timer_expiry, Timer}).
+timer_expiry(Metric) ->
+    ServerName = binary_to_atom(Metric, utf8),
+    gen_server:call(whereis(ServerName), {timer_expiry, Metric}).
+
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
@@ -161,12 +184,12 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-timer_handle(#state{tserver = Name, report_time = RTime, module = Module, function = Function, args = Args}) ->
+timer_handle(#state{metric = Metric, report_time = RTime, module = Module, function = Function, args = Args}) ->
     case cfalcon:check_leader() of
         true ->
             try
-                {Metric, TimeStamp, Value, Tags} = Module:Function(Name, Args),
-                cfalcon:report(Metric, TimeStamp, Value, cfalcon:generate_tags(Tags), RTime)
+                {TimeStamp, Value, Tags} = Module:Function(Metric, Args),
+                report(Metric, TimeStamp, Value, generate_tags(Tags), RTime)
             catch
                 E:R  ->
                     error_logger:error_msg("report error:~p, reason:~p, bt:~p", [E, R, erlang:get_stacktrace()])
@@ -174,3 +197,163 @@ timer_handle(#state{tserver = Name, report_time = RTime, module = Module, functi
         false ->
             ignore
     end.
+
+
+-spec report(Metric :: binary(), TimeStamp :: integer(), Value :: integer(), Tags :: binary(), Step :: integer()) -> any().
+report(Metric, TimeStamp, Value, Tags, Step) ->
+    Body = [
+        [
+            {metric, Metric},
+            {timestamp, TimeStamp},
+            {counterType, <<"GAUGE">>},
+            {endpoint, endpoint(?ENDPOINT)},
+            {step, Step},
+            {tags, Tags},
+            {value, Value}
+        ]
+    ],
+    send(post, ?FALCON_URL, [], jsx:encode(Body), [], ?FALCON_RETRY).
+
+endpoint(undefined) ->
+    host_name();
+endpoint(EndPoint) ->
+    EndPoint.
+
+host_name() ->
+    case application:get_env(falcon, host_name, <<>>) of
+        <<>> ->
+            {ok, Host} = inet:gethostname(),
+            case ?IS_SHORT_HOSTNAME of
+                true ->
+                    [SHost | _IP] = string:tokens(Host, "@"),
+                    application:set_env(falcon, host_name, list_to_binary(SHost));
+                false ->
+                    application:set_env(falcon, host_name, list_to_binary(Host))
+            end,
+            application:get_env(falcon, host_name, <<>>);
+        HostName ->
+            HostName
+    end.
+
+send(_Method, _Url, _Headers, _Body, _Options, 0) ->
+    ok;
+send(Method, Url, Headers, Body, Options, Retry) ->
+    case httpc:request(Method, {Url, Headers, "application/json", Body}, Options, [{body_format, binary}]) of
+        {ok, {{_Version, 200, _Msg}, _Server, Response}} ->
+            error_logger:info_msg("send url:~p, body:~p, res_body:~p", [Url, Body, Response]);
+        {ok, Result} ->
+            error_logger:error_msg("send url:~p, body:~p, result:~p", [Url, Body, Result]),
+            send(Method, Url, Headers, Body, Options, Retry - 1);
+        {error, Error} ->
+            error_logger:error_msg("send url:~p, body:~p, error:~p", [Url, Body, Error]),
+            send(Method, Url, Headers, Body, Options, Retry - 1)
+    end.
+
+to_binary(X) when is_integer(X) -> integer_to_binary(X);
+to_binary(X) when is_binary(X) -> X;
+to_binary(X) when is_float(X) -> float_to_binary(X);
+to_binary(X) when is_atom(X) -> atom_to_binary(X, utf8);
+to_binary(X) when is_list(X) ->
+    case io_lib:printable_list(X) of
+        true ->
+            list_to_binary(X);
+        false ->
+            jsx:encode(X)
+    end.
+
+generate_tags(List) ->
+    lists:foldl(fun(T, <<>>) ->
+        {K, V} = T,
+        BK = to_binary(K),
+        BV = to_binary(V),
+        <<BK/binary, "=", BV/binary>>;
+        (T, Acc) ->
+            {K, V} = T,
+            BK = to_binary(K),
+            BV = to_binary(V),
+            <<Acc/binary, ",", BK/binary, "=", BV/binary>> end, <<>>, List).
+
+%指标统计 自增
+falcon_incr(Key) ->
+    NewKey = gen_key(Key),
+    fredis:qpexcute_retry([["INCR", NewKey], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
+
+falcon_incr(Key, TimeStamp) ->
+    NewKey = gen_key(Key, TimeStamp),
+    fredis:qpexcute_retry([["INCR", NewKey], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
+
+%指标统计 累加
+falcon_incrby(Key, Value) ->
+    NewKey = gen_key(Key),
+    fredis:qpexcute_retry([["INCRBY", NewKey, Value], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
+
+falcon_incrby(Key, Value, TimeStamp) ->
+    NewKey = gen_key(Key, TimeStamp),
+    fredis:qpexcute_retry([["INCRBY", NewKey, Value], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
+
+%指标统计 更新
+falcon_set(Key, Value) ->
+    NewKey = gen_key(Key),
+    fredis:qpexcute_retry([["SET", NewKey, Value], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
+
+falcon_set(Key, Value, TimeStamp) ->
+    NewKey = gen_key(Key, TimeStamp),
+    fredis:qpexcute_retry([["SET", NewKey, Value], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
+
+
+date_format() ->
+    Now = erlang:system_time(micro_seconds),
+    BaseDate = calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}}),
+    Time = calendar:gregorian_seconds_to_datetime(BaseDate + Now div 1000000),
+    {{Y, M, D}, {H, Mi, _S}} = calendar:universal_time_to_local_time(Time),
+    list_to_binary(io_lib:format("~4..0b~2..0b~2..0b~2..0b~2..0b", [Y, M, D, H, Mi])).
+
+date_format(TimeStamp) ->
+    Now = TimeStamp * 1000000,
+    BaseDate = calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}}),
+    Time = calendar:gregorian_seconds_to_datetime(BaseDate + Now div 1000000),
+    {{Y, M, D}, {H, Mi, _S}} = calendar:universal_time_to_local_time(Time),
+    list_to_binary(io_lib:format("~4..0b~2..0b~2..0b~2..0b~2..0b", [Y, M, D, H, Mi])).
+
+get_key_prefix() ->
+    case application:get_env(falcon, key_prefix, undefined) of
+        undefined ->
+            Prefix = case ?ENDPOINT of
+                         undefined ->
+                             atom_to_binary(node(), utf8);
+                         _EndPoint ->
+                             [Service, _Info] = binary:split(atom_to_binary(node(), utf8), <<"@">>),
+                             Service
+                     end,
+
+            application:set_env(falcon, key_prefix, Prefix),
+            application:get_env(falcon, key_prefix, <<>>);
+        Prefix ->
+            Prefix
+    end.
+
+gen_key(Key) ->
+    Prefix = get_key_prefix(),
+    Date = date_format(),
+    <<Prefix/binary, "_", Date/binary, "_", Key/binary>>.
+
+gen_key(Key, TimeStamp) ->
+    Prefix = get_key_prefix(),
+    Date = date_format(TimeStamp),
+    <<Prefix/binary, "_", Date/binary, "_", Key/binary>>.
+
+default_callback(Metric, Args) ->
+    %前一分钟
+    LastTimeStamp = timestamp() - 60,
+    SaveKey = gen_key(Metric, LastTimeStamp),
+    {ok, Value} = fredis:excute_retry(["GET", SaveKey], ?FALCON_REDIS_RETRY),
+    {LastTimeStamp, convert_value(Value), Args}.
+
+timestamp() ->
+    {M, S, _MS} = os:timestamp(),
+    M * 1000000 + S.
+
+convert_value(undefined) ->
+    0;
+convert_value(Value) ->
+    binary_to_integer(Value).

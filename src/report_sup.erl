@@ -68,5 +68,5 @@ init([]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-start_child(TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
-    supervisor:start_child(?MODULE, [TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs]).
+start_child(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
+    supervisor:start_child(?MODULE, [Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs]).

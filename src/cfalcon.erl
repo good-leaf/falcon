@@ -16,13 +16,23 @@
     code_change/3]).
 
 -export([
-    report/5,
+    incr/1,
+    incr/2,
+    incrby/2,
+    incrby/3,
+    set/2,
+    set/3,
+    gen_key/1,
+    gen_key/2,
     check_leader/0,
-    callback/1,
-    metric_register/5,
-    generate_tags/1
+    metric_register/3,
+    metric_register/5
 ]).
 
+-export([
+    test/0,
+    test/1,
+    ptest/1]).
 -define(SERVER, ?MODULE).
 
 -record(state, {}).
@@ -147,13 +157,51 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+%ReportTime 秒
+-spec metric_register(binary(), integer(), atom(), atom(), list()) -> any().
+metric_register(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
+    report_sup:start_child(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs).
+
+-spec metric_register(binary(), integer(), list()) -> any().
+metric_register(Metric, ReportTime, CallBackArgs) ->
+    metric_register(Metric, ReportTime, report_timer, default_callback, CallBackArgs).
+
+gen_key(Metric) ->
+    report_timer:gen_key(Metric).
+
+gen_key(Metric, TimeStamp) ->
+    report_timer:gen_key(Metric, TimeStamp).
+
+incr(Metric) ->
+    ServerName = binary_to_atom(Metric, utf8),
+    gen_server:cast(whereis(ServerName), {incr, Metric}).
+
+incr(Metric, TimeStamp) ->
+    ServerName = binary_to_atom(Metric, utf8),
+    gen_server:cast(whereis(ServerName), {incr, Metric, TimeStamp}).
+
+incrby(Metric, Value) ->
+    ServerName = binary_to_atom(Metric, utf8),
+    gen_server:cast(whereis(ServerName), {incrby, Metric, Value}).
+
+incrby(Metric, Value, TimeStamp) ->
+    ServerName = binary_to_atom(Metric, utf8),
+    gen_server:cast(whereis(ServerName), {incrby, Metric, Value, TimeStamp}).
+
+set(Metric, Value) ->
+    ServerName = binary_to_atom(Metric, utf8),
+    gen_server:cast(whereis(ServerName), {set, Metric, Value}).
+
+set(Metric, Value, TimeStamp) ->
+    ServerName = binary_to_atom(Metric, utf8),
+    gen_server:cast(whereis(ServerName), {set, Metric, Value, TimeStamp}).
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 node_register() ->
     try
         Node = atom_to_binary(node(), utf8),
-        eredis_cluster:q(["SETEX", <<"falcon_", Node/binary>>, ?REDIS_NODE_EXPIRED, Node])
+        fredis:excute_retry(["SETEX", <<"falcon_", Node/binary>>, ?REDIS_NODE_EXPIRED, Node], ?FALCON_REDIS_RETRY)
     catch
         E:R ->
             error_logger:error_msg("node_register error:~p, reason:~p", [E, R])
@@ -161,110 +209,81 @@ node_register() ->
 
 check_leader() ->
     try
-        [Service, _Info] = binary:split(atom_to_binary(node(), utf8), <<"@">>),
-        Result = eredis_cluster:qa(["KEYS", <<"falcon_", Service/binary, "*">>]),
-        Node = atom_to_binary(node(), utf8),
-        <<"falcon_", Node/binary>> == lists:last(lists:sort(lists:foldl(fun(Tuple, Acc) -> {ok, L} = Tuple,
-            Acc ++ L end, [], Result)))
+        case ?ENDPOINT of
+            undefined ->
+                %按照节点上报
+                true;
+            _EndPoint ->
+                [Service, _Info] = binary:split(atom_to_binary(node(), utf8), <<"@">>),
+                Result = eredis_cluster:qa(["KEYS", <<"falcon_", Service/binary, "*">>]),
+                Node = atom_to_binary(node(), utf8),
+                <<"falcon_", Node/binary>> == lists:last(lists:sort(lists:foldl(fun(Tuple, Acc) -> {ok, L} = Tuple,
+                    Acc ++ L end, [], Result)))
+        end
     catch
         E:R ->
             error_logger:error_msg("check_leader error:~p, reason:~p", [E, R]),
             false
     end.
 
--spec report(Metric :: binary(), TimeStamp :: integer(), Value :: integer(), Tags :: binary(), Step :: integer()) -> any().
-report(Metric, TimeStamp, Value, Tags, Step) ->
-    Body = [
-        [
-            {metric, Metric},
-            {timestamp, TimeStamp},
-            {counterType, <<"GAUGE">>},
-            {endpoint, endpoint(?ENDPOINT)},
-            {step, Step},
-            {tags, Tags},
-            {value, Value}
-        ]
-    ],
-    error_logger:info_msg("report:~p", [Body]),
-    send(post, ?FALCON_URL, [], jsx:encode(Body), [{timeout, 2000}, {connect_timeout, 1000}], ?RETRY).
-
-endpoint(undefined) ->
-    host_name();
-endpoint(EndPoint) ->
-    EndPoint.
-
-host_name() ->
-    case application:get_env(falcon, host_name, <<>>) of
-        <<>> ->
-            {ok, Host} = inet:gethostname(),
-            case ?IS_SHORT_HOSTNAME of
-                true ->
-                    [SHost | _IP] = string:tokens(Host, "@"),
-                    application:set_env(falcon, host_name, list_to_binary(SHost));
-                false ->
-                    application:set_env(falcon, host_name, list_to_binary(Host))
-            end,
-            application:get_env(falcon, host_name, <<>>);
-        HostName ->
-            HostName
-    end.
-
-send(_Method, _Url, _Headers, _Body, _Options, 0) ->
-    ok;
-send(Method, Url, Headers, Body, Options, Retry) ->
-    case httpc:request(Method, {Url, Headers, "application/json", Body}, Options, [{body_format, binary}]) of
-        {ok, {{_Version, 200, _Msg}, _Server, Response}} ->
-            error_logger:info_msg("send url:~p, body:~p, res_body:~p", [Url, Body, Response]);
-        {ok, Result} ->
-            error_logger:error_msg("send url:~p, body:~p, result:~p", [Url, Body, Result]),
-            send(Method, Url, Headers, Body, Options, Retry - 1);
-        {error, Error} ->
-            error_logger:error_msg("send url:~p, body:~p, error:~p", [Url, Body, Error]),
-            send(Method, Url, Headers, Body, Options, Retry - 1)
-    end.
-
-%ReportTime 秒
--spec metric_register(atom(), integer(), atom(), atom(), list()) -> any().
-metric_register(TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
-    report_sup:start_child(TServer, ReportTime, CallBackModule, CallBackFun, CallBackArgs).
-
-callback(CallBackArgs) ->
-    Tags = lists:foldl(fun(T, <<>>) ->
-        {K, V} = T,
-        BK = to_binary(K),
-        BV = to_binary(V),
-        <<BK/binary, "=", BV/binary>>;
-        (T, Acc) ->
-            {K, V} = T,
-            BK = to_binary(K),
-            BV = to_binary(V),
-            <<Acc/binary, ",", BK/binary, "=", BV/binary>> end, <<>>, CallBackArgs),
-    {<<"metric_name">>, timestamp(), 100, Tags}.
-
-to_binary(X) when is_integer(X) -> integer_to_binary(X);
-to_binary(X) when is_binary(X) -> X;
-to_binary(X) when is_float(X) -> float_to_binary(X);
-to_binary(X) when is_atom(X) -> atom_to_binary(X, utf8);
-to_binary(X) when is_list(X) ->
-    case io_lib:printable_list(X) of
-        true ->
-            list_to_binary(X);
-        false ->
-            jsx:encode(X)
-    end.
-
 timestamp() ->
     {M, S, _MS} = os:timestamp(),
     M * 1000000 + S.
 
-generate_tags(List) ->
-    lists:foldl(fun(T, <<>>) ->
-        {K, V} = T,
-        BK = to_binary(K),
-        BV = to_binary(V),
-        <<BK/binary, "=", BV/binary>>;
-        (T, Acc) ->
-            {K, V} = T,
-            BK = to_binary(K),
-            BV = to_binary(V),
-            <<Acc/binary, ",", BK/binary, "=", BV/binary>> end, <<>>, List).
+umilltimestamp() ->
+    {M, S, MS} = os:timestamp(),
+    M * 1000000000000 + S * 1000000 + MS.
+
+generate_uuid() ->
+    Bin = crypto:strong_rand_bytes(12),
+    Time = integer_to_binary(umilltimestamp()),
+    NewBin = <<Bin/binary, Time/binary>>,
+    Sig = erlang:md5(NewBin),
+    iolist_to_binary([io_lib:format("~2.16.0b", [S]) || S <- binary_to_list(Sig)]).
+
+%事例
+ptest(Num) ->
+    Fun = fun(_N) ->
+        spawn(?MODULE, test, [generate_uuid()])
+          end,
+    [Fun(N) || N <- lists:seq(1, Num)].
+
+test(Key) ->
+    test_incr(<<"incr", Key/binary>>),
+    test_incr1(<<"incr1", Key/binary>>),
+    test_incrby(<<"incrby", Key/binary>>, 100),
+    test_incrby1(<<"incrby1", Key/binary>>, 200),
+    test_set(<<"set", Key/binary>>, 300),
+    test_set1(<<"set1", Key/binary>>, 400).
+
+test() ->
+    test(<<>>).
+
+test_incr(Metric) ->
+    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    incr(Metric).
+
+test_incr1(Metric) ->
+    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    incr(Metric, timestamp()).
+
+test_incrby(Metric, Value) ->
+    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    incrby(Metric, Value).
+
+test_incrby1(Metric, Value) ->
+    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    incrby(Metric, Value, timestamp()).
+
+test_set(Metric, Value) ->
+    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    set(Metric, Value).
+
+test_set1(Metric, Value) ->
+    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    set(Metric, Value, timestamp()).
+
+
+
+
+
