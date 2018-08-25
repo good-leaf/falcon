@@ -366,7 +366,6 @@ gen_key(Key, TimeStamp) ->
     <<Prefix/binary, "_", Key/binary, "_", Date/binary>>.
 
 default_callback(Metric, ReportTime, Args) ->
-    %前一分钟
     LastTimeStamp = timestamp() - 2 * ReportTime,
     SaveKey = gen_key(Metric, LastTimeStamp),
     {ok, Value} = fredis:excute_retry(["GET", SaveKey], ?FALCON_REDIS_RETRY),
