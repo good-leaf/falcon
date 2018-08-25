@@ -20,7 +20,7 @@
     gen_key/1,
     gen_key/2,
     timer_expiry/1,
-    default_callback/2
+    default_callback/3
 ]).
 
 -define(SERVER, ?MODULE).
@@ -197,7 +197,7 @@ timer_handle(#state{metric = Metric, report_time = RTime, module = Module, funct
         reflush(State),
         case cfalcon:check_leader() of
             true ->
-                {TimeStamp, Value, Tags} = Module:Function(Metric, Args),
+                {TimeStamp, Value, Tags} = Module:Function(Metric, RTime, Args),
                 report(Metric, TimeStamp, Value, generate_tags(Tags), RTime);
             false ->
                 ignore
@@ -365,9 +365,9 @@ gen_key(Key, TimeStamp) ->
     Date = date_format(TimeStamp),
     <<Prefix/binary, "_", Key/binary, "_", Date/binary>>.
 
-default_callback(Metric, Args) ->
+default_callback(Metric, ReportTime, Args) ->
     %前一分钟
-    LastTimeStamp = timestamp() - 60,
+    LastTimeStamp = timestamp() - 2 * ReportTime,
     SaveKey = gen_key(Metric, LastTimeStamp),
     {ok, Value} = fredis:excute_retry(["GET", SaveKey], ?FALCON_REDIS_RETRY),
     {LastTimeStamp, convert_value(Value), Args}.
