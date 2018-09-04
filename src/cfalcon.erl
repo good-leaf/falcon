@@ -161,7 +161,18 @@ code_change(_OldVsn, State, _Extra) ->
 %ReportTime 秒
 -spec metric_register(binary(), binary(), integer(), atom(), atom(), list()) -> any().
 metric_register(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
-    report_sup:start_child(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs).
+    AtomMetric = binary_to_atom(Metric, utf8),
+    case whereis(AtomMetric) of
+        undefined ->
+            report_sup:start_child(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs);
+        Pid when is_pid(Pid) ->
+            case is_process_alive(Pid) of
+                true ->
+                    ok;
+                false ->
+                    report_sup:start_child(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs)
+            end
+    end.
 
 -spec metric_register(binary(), binary(), integer(), list()) -> any().
 metric_register(Metric, Type, ReportTime, CallBackArgs) ->
@@ -198,22 +209,22 @@ gen_key(Metric, TimeStamp) ->
 %%    gen_server:cast(whereis(ServerName), {set, Metric, Value, TimeStamp}).
 
 incr(Metric) ->
-    count:incr(term_to_binary({Metric, timestamp()})).
+    count:incr(gen_key(Metric, timestamp())).
 
 incr(Metric, TimeStamp) ->
-    count:incr(term_to_binary({Metric, TimeStamp})).
+    count:incr(gen_key(Metric, TimeStamp)).
 
 incrby(Metric, Value) ->
-    count:incrby(term_to_binary({Metric, timestamp()}), Value).
+    count:incrby(gen_key(Metric, timestamp()), Value).
 
 incrby(Metric, Value, TimeStamp) ->
-    count:incrby(term_to_binary({Metric, TimeStamp}), Value).
+    count:incrby(gen_key(Metric, TimeStamp), Value).
 
 set(Metric, Value) ->
-    count:set(term_to_binary({Metric, timestamp()}), Value).
+    count:set(gen_key(Metric, timestamp()), Value).
 
 set(Metric, Value, TimeStamp) ->
-    count:set(term_to_binary({Metric, TimeStamp}), Value).
+    count:set(gen_key(Metric, TimeStamp), Value).
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -269,20 +280,13 @@ ptest(Num) ->
 
 test(Key) ->
     test_incr(<<"incr", Key/binary>>),
-    test_incr1(<<"incr1", Key/binary>>),
-    test_incrby(<<"incrby", Key/binary>>, 100),
-    test_incrby1(<<"incrby1", Key/binary>>, 200),
-    test_set(<<"set", Key/binary>>, 300),
-    test_set1(<<"set1", Key/binary>>, 400).
+    test_incrby(<<"incrby", Key/binary>>, 2),
+    test_set(<<"set", Key/binary>>, 3).
 
 test() ->
     test(<<>>).
 
 test_incr(Metric) ->
-    metric_register(Metric, <<"incr">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
-    incr(Metric).
-
-test_incr1(Metric) ->
     metric_register(Metric, <<"incr">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     incr(Metric, timestamp()).
 
@@ -290,15 +294,7 @@ test_incrby(Metric, Value) ->
     metric_register(Metric, <<"incrby">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     incrby(Metric, Value).
 
-test_incrby1(Metric, Value) ->
-    metric_register(Metric, <<"incrby">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
-    incrby(Metric, Value, timestamp()).
-
 test_set(Metric, Value) ->
-    metric_register(Metric, <<"set">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
-    set(Metric, Value).
-
-test_set1(Metric, Value) ->
     metric_register(Metric, <<"set">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     set(Metric, Value, timestamp()).
 

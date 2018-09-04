@@ -221,19 +221,18 @@ timer_handle(#state{metric = Metric, type = Type, report_time = RTime, module = 
 
 reflush_cache(Metric, RTime, Type) ->
     CurrentTime = timestamp() - RTime,
-    EKey = {Metric, CurrentTime},
-    case count:get(term_to_binary(EKey)) of
+    EKey = gen_key(Metric, CurrentTime),
+    case count:get(EKey) of
         [] ->
             ok;
         [{_Key, Value}] ->
-            RKey = gen_key(Metric, CurrentTime),
             case Type of
                 <<"incr">> ->
-                    reflush_data(RKey, Value, <<"INCRBY">>);
+                    reflush_data(EKey, Value, <<"INCRBY">>);
                 <<"incrby">> ->
-                    reflush_data(RKey, Value, <<"INCRBY">>);
+                    reflush_data(EKey, Value, <<"INCRBY">>);
                 <<"set">> ->
-                    reflush_data(RKey, Value, <<"SET">>);
+                    reflush_data(EKey, Value, <<"SET">>);
                 _Type ->
                     ok
             end,
@@ -363,15 +362,8 @@ date_format(TimeStamp) ->
 get_key_prefix() ->
     case application:get_env(falcon, key_prefix, undefined) of
         undefined ->
-            Prefix = case ?ENDPOINT of
-                         undefined ->
-                             atom_to_binary(node(), utf8);
-                         _EndPoint ->
-                             [Service, _Info] = binary:split(atom_to_binary(node(), utf8), <<"@">>),
-                             Service
-                     end,
-
-            application:set_env(falcon, key_prefix, Prefix),
+            [Service, _Info] = binary:split(atom_to_binary(node(), utf8), <<"@">>),
+            application:set_env(falcon, key_prefix, Service),
             application:get_env(falcon, key_prefix, <<>>);
         Prefix ->
             Prefix
