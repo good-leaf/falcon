@@ -22,11 +22,12 @@
     incrby/3,
     set/2,
     set/3,
+
     gen_key/1,
     gen_key/2,
     check_leader/0,
-    metric_register/3,
-    metric_register/5
+    metric_register/4,
+    metric_register/6
 ]).
 
 -export([
@@ -158,13 +159,13 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %ReportTime 秒
--spec metric_register(binary(), integer(), atom(), atom(), list()) -> any().
-metric_register(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
-    report_sup:start_child(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs).
+-spec metric_register(binary(), binary(), integer(), atom(), atom(), list()) -> any().
+metric_register(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
+    report_sup:start_child(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs).
 
--spec metric_register(binary(), integer(), list()) -> any().
-metric_register(Metric, ReportTime, CallBackArgs) ->
-    metric_register(Metric, ReportTime, report_timer, default_callback, CallBackArgs).
+-spec metric_register(binary(), binary(), integer(), list()) -> any().
+metric_register(Metric, Type, ReportTime, CallBackArgs) ->
+    metric_register(Metric, Type, ReportTime, report_timer, default_callback, CallBackArgs).
 
 gen_key(Metric) ->
     report_timer:gen_key(Metric).
@@ -172,29 +173,47 @@ gen_key(Metric) ->
 gen_key(Metric, TimeStamp) ->
     report_timer:gen_key(Metric, TimeStamp).
 
+%%incr(Metric) ->
+%%    ServerName = binary_to_atom(Metric, utf8),
+%%    gen_server:cast(whereis(ServerName), {incr, Metric}).
+%%
+%%incr(Metric, TimeStamp) ->
+%%    ServerName = binary_to_atom(Metric, utf8),
+%%    gen_server:cast(whereis(ServerName), {incr, Metric, TimeStamp}).
+%%
+%%incrby(Metric, Value) ->
+%%    ServerName = binary_to_atom(Metric, utf8),
+%%    gen_server:cast(whereis(ServerName), {incrby, Metric, Value}).
+%%
+%%incrby(Metric, Value, TimeStamp) ->
+%%    ServerName = binary_to_atom(Metric, utf8),
+%%    gen_server:cast(whereis(ServerName), {incrby, Metric, Value, TimeStamp}).
+%%
+%%set(Metric, Value) ->
+%%    ServerName = binary_to_atom(Metric, utf8),
+%%    gen_server:cast(whereis(ServerName), {set, Metric, Value}).
+%%
+%%set(Metric, Value, TimeStamp) ->
+%%    ServerName = binary_to_atom(Metric, utf8),
+%%    gen_server:cast(whereis(ServerName), {set, Metric, Value, TimeStamp}).
+
 incr(Metric) ->
-    ServerName = binary_to_atom(Metric, utf8),
-    gen_server:cast(whereis(ServerName), {incr, Metric}).
+    count:incr(term_to_binary({Metric, timestamp()})).
 
 incr(Metric, TimeStamp) ->
-    ServerName = binary_to_atom(Metric, utf8),
-    gen_server:cast(whereis(ServerName), {incr, Metric, TimeStamp}).
+    count:incr(term_to_binary({Metric, TimeStamp})).
 
 incrby(Metric, Value) ->
-    ServerName = binary_to_atom(Metric, utf8),
-    gen_server:cast(whereis(ServerName), {incrby, Metric, Value}).
+    count:incrby(term_to_binary({Metric, timestamp()}), Value).
 
 incrby(Metric, Value, TimeStamp) ->
-    ServerName = binary_to_atom(Metric, utf8),
-    gen_server:cast(whereis(ServerName), {incrby, Metric, Value, TimeStamp}).
+    count:incrby(term_to_binary({Metric, TimeStamp}), Value).
 
 set(Metric, Value) ->
-    ServerName = binary_to_atom(Metric, utf8),
-    gen_server:cast(whereis(ServerName), {set, Metric, Value}).
+    count:set(term_to_binary({Metric, timestamp()}), Value).
 
 set(Metric, Value, TimeStamp) ->
-    ServerName = binary_to_atom(Metric, utf8),
-    gen_server:cast(whereis(ServerName), {set, Metric, Value, TimeStamp}).
+    count:set(term_to_binary({Metric, TimeStamp}), Value).
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -260,27 +279,27 @@ test() ->
     test(<<>>).
 
 test_incr(Metric) ->
-    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    metric_register(Metric, <<"incr">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     incr(Metric).
 
 test_incr1(Metric) ->
-    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    metric_register(Metric, <<"incr">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     incr(Metric, timestamp()).
 
 test_incrby(Metric, Value) ->
-    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    metric_register(Metric, <<"incrby">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     incrby(Metric, Value).
 
 test_incrby1(Metric, Value) ->
-    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    metric_register(Metric, <<"incrby">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     incrby(Metric, Value, timestamp()).
 
 test_set(Metric, Value) ->
-    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    metric_register(Metric, <<"set">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     set(Metric, Value).
 
 test_set1(Metric, Value) ->
-    metric_register(Metric, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
+    metric_register(Metric, <<"set">>, 60, report_timer, default_callback, [{<<"env">>, <<"test">>}]),
     set(Metric, Value, timestamp()).
 
 

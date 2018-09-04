@@ -4,7 +4,7 @@
 
 -include("../include/falcon.hrl").
 %% API
--export([start_link/5]).
+-export([start_link/6]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -46,11 +46,11 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec(start_link(Metric :: binary(), ReportTime :: integer(), CallBackModule :: atom(), CallBackFun :: integer(), CallBackArgs :: list()) ->
+-spec(start_link(Metric :: binary(), Type :: binary(), ReportTime :: integer(), CallBackModule :: atom(), CallBackFun :: integer(), CallBackArgs :: list()) ->
     {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
-start_link(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
+start_link(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
     AtomMetric = binary_to_atom(Metric, utf8),
-    gen_server:start_link({local, AtomMetric}, ?MODULE, [Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs], []).
+    gen_server:start_link({local, AtomMetric}, ?MODULE, [Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -70,12 +70,12 @@ start_link(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
 -spec(init(Args :: term()) ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
-init([Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs]) ->
+init([Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs]) ->
     NameTimer = binary_to_atom(<<"falcon_", Metric/binary>>, utf8),
     {ok, _Pid} = chronos:start_link(NameTimer),
     _TS = chronos:start_timer(NameTimer, NameTimer, ReportTime * 1000,
         {?MODULE, timer_expiry, [Metric]}),
-    {ok, #state{metric = Metric, ntimer = NameTimer, report_time = ReportTime, module = CallBackModule, function = CallBackFun, args = CallBackArgs}}.
+    {ok, #state{metric = Metric, type = Type, ntimer = NameTimer, report_time = ReportTime, module = CallBackModule, function = CallBackFun, args = CallBackArgs}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -192,9 +192,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-timer_handle(#state{metric = Metric, report_time = RTime, module = Module, function = Function, args = Args} = State) ->
+timer_handle(#state{metric = Metric, type = Type, report_time = RTime, module = Module, function = Function, args = Args}) ->
     try
-        reflush(State),
+        reflush_cache(Metric, RTime, Type),
         case cfalcon:check_leader() of
             true ->
                 {TimeStamp, Value, Tags} = Module:Function(Metric, RTime, Args),
@@ -207,17 +207,39 @@ timer_handle(#state{metric = Metric, report_time = RTime, module = Module, funct
             error_logger:error_msg("timer_handle error:~p, reason:~p, bt:~p", [E, R, erlang:get_stacktrace()])
     end.
 
-reflush(#state{type = Type, local_data = LocalData}) ->
-    case Type of
-        <<"incr">> ->
-            lists:foreach(fun({K, V}) -> reflush_data(K, V, "INCRBY") end, maps:to_list(LocalData));
-        <<"incrby">> ->
-            lists:foreach(fun({K, V}) -> reflush_data(K, V, "INCRBY") end, maps:to_list(LocalData));
-        <<"set">> ->
-            lists:foreach(fun({K, V}) -> reflush_data(K, V, "SET") end, maps:to_list(LocalData));
-        _Type ->
-            ok
+%%reflush(#state{type = Type, local_data = LocalData}) ->
+%%    case Type of
+%%        <<"incr">> ->
+%%            lists:foreach(fun({K, V}) -> reflush_data(K, V, "INCRBY") end, maps:to_list(LocalData));
+%%        <<"incrby">> ->
+%%            lists:foreach(fun({K, V}) -> reflush_data(K, V, "INCRBY") end, maps:to_list(LocalData));
+%%        <<"set">> ->
+%%            lists:foreach(fun({K, V}) -> reflush_data(K, V, "SET") end, maps:to_list(LocalData));
+%%        _Type ->
+%%            ok
+%%    end.
+
+reflush_cache(Metric, RTime, Type) ->
+    CurrentTime = timestamp() - RTime,
+    EKey = {Metric, CurrentTime},
+    case count:get(term_to_binary(EKey)) of
+        [] ->
+            ok;
+        [{_Key, Value}] ->
+            RKey = gen_key(Metric, CurrentTime),
+            case Type of
+                <<"incr">> ->
+                    reflush_data(RKey, Value, <<"INCRBY">>);
+                <<"incrby">> ->
+                    reflush_data(RKey, Value, <<"INCRBY">>);
+                <<"set">> ->
+                    reflush_data(RKey, Value, <<"SET">>);
+                _Type ->
+                    ok
+            end,
+            count:del(EKey)
     end.
+
 
 
 -spec report(Metric :: binary(), TimeStamp :: integer(), Value :: integer(), Tags :: binary(), Step :: integer()) -> any().

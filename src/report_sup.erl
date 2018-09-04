@@ -8,7 +8,7 @@
 %% Supervisor callbacks
 -export([
     init/1,
-    start_child/5
+    start_child/6
 ]).
 
 -define(SERVER, ?MODULE).
@@ -68,5 +68,5 @@ init([]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-start_child(Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
-    supervisor:start_child(?MODULE, [Metric, ReportTime, CallBackModule, CallBackFun, CallBackArgs]).
+start_child(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
+    supervisor:start_child(?MODULE, [Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs]).
