@@ -206,7 +206,7 @@ set(Metric, Value, TimeStamp) ->
 %%%===================================================================
 node_ping() ->
     try
-        Nodes = lists:usort(?FALCON_NODES ++ nodes()),
+        Nodes = get_nodes(),
         lists:foreach(fun(N) -> case net_adm:ping(N) of
                                     pong ->
                                         ok;
@@ -217,6 +217,17 @@ node_ping() ->
         E:R ->
             error_logger:error_msg("node_ping error:~p, reason:~p", [E, R])
     end.
+
+get_nodes() ->
+    [NodePrefix | _NodeTail] = binary:split(atom_to_binary(node(),utf8), <<"@">>),
+    lists:usort(lists:foldl(fun(RemoteNode, Acc) ->
+        [RemoteNodePrefix | _RemoteNodeTail] = binary:split(atom_to_binary(RemoteNode,utf8), <<"@">>),
+        case RemoteNodePrefix == NodePrefix of
+            true ->
+                [RemoteNode | Acc];
+            false ->
+                Acc
+        end end, ?FALCON_NODES, nodes())).
 
 check_leader() ->
     Nodes = nodes(),
