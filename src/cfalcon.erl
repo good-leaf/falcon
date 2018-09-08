@@ -207,12 +207,14 @@ set(Metric, Value, TimeStamp) ->
 node_ping() ->
     try
         Nodes = get_nodes(),
-        lists:foreach(fun(N) -> case net_adm:ping(N) of
+        AliveNodes = lists:foldl(fun(N, Acc) -> case net_adm:ping(N) of
                                     pong ->
-                                        ok;
+                                        [N | Acc];
                                     R ->
-                                        error_logger:warning_msg("node_ping:~p, result:~p, ", [N, R])
-                                end end, Nodes)
+                                        error_logger:warning_msg("node_ping:~p, result:~p, ", [N, R]),
+                                        Acc
+                                end end,[], Nodes),
+        application:set_env(falcon, alive_nodes, AliveNodes)
     catch
         E:R ->
             error_logger:error_msg("node_ping error:~p, reason:~p", [E, R])
@@ -220,17 +222,17 @@ node_ping() ->
 
 get_nodes() ->
     [NodePrefix | _NodeTail] = binary:split(atom_to_binary(node(),utf8), <<"@">>),
-    lists:usort(lists:foldl(fun(RemoteNode, Acc) ->
+    lists:foldl(fun(RemoteNode, Acc) ->
         [RemoteNodePrefix | _RemoteNodeTail] = binary:split(atom_to_binary(RemoteNode,utf8), <<"@">>),
         case RemoteNodePrefix == NodePrefix of
             true ->
                 [RemoteNode | Acc];
             false ->
                 Acc
-        end end, [], ?FALCON_NODES ++ nodes())).
+        end end, [], lists:usort(?FALCON_NODES ++ nodes())).
 
 check_leader() ->
-    Nodes = nodes(),
+    Nodes = application:get_env(falcon, alive_nodes, []),
     node() == lists:last(lists:usort([node() | Nodes])).
 
 timestamp() ->
