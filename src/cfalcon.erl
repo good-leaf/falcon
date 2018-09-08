@@ -227,7 +227,7 @@ get_nodes() ->
                 [RemoteNode | Acc];
             false ->
                 Acc
-        end end, ?FALCON_NODES, nodes())).
+        end end, [], ?FALCON_NODES ++ nodes())).
 
 check_leader() ->
     Nodes = nodes(),
