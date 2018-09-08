@@ -32,8 +32,7 @@
     module,
     function,
     args,
-    type,
-    local_data = #{}
+    type
 }).
 
 %%%===================================================================
@@ -94,11 +93,11 @@ init([Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackArgs]) ->
     {stop, Reason :: term(), NewState :: #state{}}).
 handle_call({timer_expiry, Metric}, _From, #state{report_time = RTime} = State) ->
     error_logger:info_msg("timer_expiry for ~p~n", [State]),
-    timer_handle(State),
+    spawn(?MODULE, timer_handle, [convert_state(State)]),
     _TS = chronos:start_timer(State#state.ntimer,
         State#state.ntimer, RTime * 1000,
         {?MODULE, timer_expiry, [Metric]}),
-    {reply, ok, State#state{local_data = #{}}};
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
@@ -113,28 +112,6 @@ handle_call(_Request, _From, State) ->
     {noreply, NewState :: #state{}} |
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: #state{}}).
-handle_cast({incr, Metric}, #state{local_data = LocalData} = State) ->
-    Key = gen_key(Metric),
-    Value = maps:get(Key, LocalData, 0),
-    {noreply, State#state{type = <<"incr">>, local_data = LocalData#{Key => Value + 1}}};
-handle_cast({incr, Metric, TimeStamp}, #state{local_data = LocalData} = State) ->
-    Key = gen_key(Metric, TimeStamp),
-    Value = maps:get(Key, LocalData, 0),
-    {noreply, State#state{type = <<"incr">>, local_data = LocalData#{Key => Value + 1}}};
-handle_cast({incrby, Metric, Value}, #state{local_data = LocalData} = State) ->
-    Key = gen_key(Metric),
-    OldValue = maps:get(Key, LocalData, 0),
-    {noreply, State#state{type = <<"incrby">>, local_data = LocalData#{Key => Value + OldValue}}};
-handle_cast({incrby, Metric, Value, TimeStamp}, #state{local_data = LocalData} = State) ->
-    Key = gen_key(Metric, TimeStamp),
-    OldValue = maps:get(Key, LocalData, 0),
-    {noreply, State#state{type = <<"incrby">>, local_data = LocalData#{Key => Value + OldValue}}};
-handle_cast({set, Metric, Value}, #state{local_data = LocalData} = State) ->
-    Key = gen_key(Metric),
-    {noreply, State#state{type = <<"set">>, local_data = LocalData#{Key => Value}}};
-handle_cast({set, Metric, Value, TimeStamp}, #state{local_data = LocalData} = State) ->
-    Key = gen_key(Metric, TimeStamp),
-    {noreply, State#state{type = <<"set">>, local_data = LocalData#{Key => Value}}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -192,9 +169,21 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-timer_handle(#state{metric = Metric, type = Type, report_time = RTime, module = Module, function = Function, args = Args}) ->
+convert_state(#state{metric = Metric, type = Type, report_time = RTime, module = Module,
+    function = Function, args = Args}) ->
+    #{
+        metric => Metric,
+        type => Type,
+        report_time => RTime,
+        module => Module,
+        function => Function,
+        args => Args
+    }.
+
+timer_handle(#{metric := Metric, type := Type, report_time := RTime, module := Module,
+    function := Function, args := Args}) ->
     try
-        reflush_cache(Metric, RTime, Type),
+        reflush_cache(Metric, RTime, Type, RTime),
         case cfalcon:check_leader() of
             true ->
                 {TimeStamp, Value, Tags} = Module:Function(Metric, RTime, Args),
@@ -207,19 +196,7 @@ timer_handle(#state{metric = Metric, type = Type, report_time = RTime, module = 
             error_logger:error_msg("timer_handle error:~p, reason:~p, bt:~p", [E, R, erlang:get_stacktrace()])
     end.
 
-%%reflush(#state{type = Type, local_data = LocalData}) ->
-%%    case Type of
-%%        <<"incr">> ->
-%%            lists:foreach(fun({K, V}) -> reflush_data(K, V, "INCRBY") end, maps:to_list(LocalData));
-%%        <<"incrby">> ->
-%%            lists:foreach(fun({K, V}) -> reflush_data(K, V, "INCRBY") end, maps:to_list(LocalData));
-%%        <<"set">> ->
-%%            lists:foreach(fun({K, V}) -> reflush_data(K, V, "SET") end, maps:to_list(LocalData));
-%%        _Type ->
-%%            ok
-%%    end.
-
-reflush_cache(Metric, RTime, Type) ->
+reflush_cache(Metric, RTime, Type, RTime) ->
     CurrentTime = timestamp() - RTime,
     EKey = gen_key(Metric, CurrentTime),
     case count:get(EKey) of
@@ -228,11 +205,11 @@ reflush_cache(Metric, RTime, Type) ->
         [{_Key, Value}] ->
             case Type of
                 <<"incr">> ->
-                    reflush_data(EKey, Value, <<"INCRBY">>);
+                    reflush_data(EKey, Value, <<"INCRBY">>, RTime);
                 <<"incrby">> ->
-                    reflush_data(EKey, Value, <<"INCRBY">>);
+                    reflush_data(EKey, Value, <<"INCRBY">>, RTime);
                 <<"set">> ->
-                    reflush_data(EKey, Value, <<"SET">>);
+                    reflush_data(EKey, Value, <<"SET">>, RTime);
                 _Type ->
                     ok
             end,
@@ -254,7 +231,7 @@ report(Metric, TimeStamp, Value, Tags, Step) ->
             {value, Value}
         ]
     ],
-    send(post, ?FALCON_URL, [], jsx:encode(Body), [], ?FALCON_RETRY).
+    send(post, ?FALCON_URL, [], jsx:encode(Body), ?FALCON_OPTION, ?FALCON_RETRY).
 
 endpoint(undefined) ->
     host_name();
@@ -315,35 +292,8 @@ generate_tags(List) ->
             BV = to_binary(V),
             <<Acc/binary, ",", BK/binary, "=", BV/binary>> end, <<>>, List).
 
-%指标统计 自增
-falcon_incr(Key) ->
-    NewKey = gen_key(Key),
-    fredis:qpexcute_retry([["INCR", NewKey], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
-
-falcon_incr(Key, TimeStamp) ->
-    NewKey = gen_key(Key, TimeStamp),
-    fredis:qpexcute_retry([["INCR", NewKey], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
-
-%指标统计 累加
-falcon_incrby(Key, Value) ->
-    NewKey = gen_key(Key),
-    fredis:qpexcute_retry([["INCRBY", NewKey, Value], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
-
-falcon_incrby(Key, Value, TimeStamp) ->
-    NewKey = gen_key(Key, TimeStamp),
-    fredis:qpexcute_retry([["INCRBY", NewKey, Value], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
-
-%指标统计 更新
-falcon_set(Key, Value) ->
-    NewKey = gen_key(Key),
-    fredis:qpexcute_retry([["SET", NewKey, Value], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
-
-falcon_set(Key, Value, TimeStamp) ->
-    NewKey = gen_key(Key, TimeStamp),
-    fredis:qpexcute_retry([["SET", NewKey, Value], ["EXPIRE", NewKey, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
-
-reflush_data(Key, Value, Cmd) ->
-    fredis:qpexcute_retry([[Cmd, Key, Value], ["EXPIRE", Key, ?KEY_EXPRIRED]], ?FALCON_REDIS_RETRY).
+reflush_data(Key, Value, Cmd, RTime) ->
+    fredis:qpexcute_retry([[Cmd, Key, Value], ["EXPIRE", Key, 10 * RTime]], ?FALCON_REDIS_RETRY).
 
 date_format() ->
     Now = erlang:system_time(micro_seconds),
@@ -380,6 +330,7 @@ gen_key(Key, TimeStamp) ->
     <<Prefix/binary, "_", Key/binary, "_", Date/binary>>.
 
 default_callback(Metric, ReportTime, Args) ->
+    %考虑集群中节点上报周期差值，当前事件上报两周期前的数据
     LastTimeStamp = timestamp() - 2 * ReportTime,
     SaveKey = gen_key(Metric, LastTimeStamp),
     {ok, Value} = fredis:excute_retry(["GET", SaveKey], ?FALCON_REDIS_RETRY),

@@ -72,7 +72,7 @@ start_link() ->
     {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term()} | ignore).
 init([]) ->
-    erlang:send_after(10, ?SERVER, node_register),
+    erlang:send_after(10, ?SERVER, node_ping),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -121,9 +121,9 @@ handle_cast(_Request, State) ->
     {noreply, NewState :: #state{}} |
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: #state{}}).
-handle_info(node_register, State) ->
-    node_register(),
-    erlang:send_after(?REG_TIMEVAL, ?SERVER, node_register),
+handle_info(node_ping, State) ->
+    node_ping(),
+    erlang:send_after(?PING_TIMEVAL, ?SERVER, node_ping),
     {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -184,30 +184,6 @@ gen_key(Metric) ->
 gen_key(Metric, TimeStamp) ->
     report_timer:gen_key(Metric, TimeStamp).
 
-%%incr(Metric) ->
-%%    ServerName = binary_to_atom(Metric, utf8),
-%%    gen_server:cast(whereis(ServerName), {incr, Metric}).
-%%
-%%incr(Metric, TimeStamp) ->
-%%    ServerName = binary_to_atom(Metric, utf8),
-%%    gen_server:cast(whereis(ServerName), {incr, Metric, TimeStamp}).
-%%
-%%incrby(Metric, Value) ->
-%%    ServerName = binary_to_atom(Metric, utf8),
-%%    gen_server:cast(whereis(ServerName), {incrby, Metric, Value}).
-%%
-%%incrby(Metric, Value, TimeStamp) ->
-%%    ServerName = binary_to_atom(Metric, utf8),
-%%    gen_server:cast(whereis(ServerName), {incrby, Metric, Value, TimeStamp}).
-%%
-%%set(Metric, Value) ->
-%%    ServerName = binary_to_atom(Metric, utf8),
-%%    gen_server:cast(whereis(ServerName), {set, Metric, Value}).
-%%
-%%set(Metric, Value, TimeStamp) ->
-%%    ServerName = binary_to_atom(Metric, utf8),
-%%    gen_server:cast(whereis(ServerName), {set, Metric, Value, TimeStamp}).
-
 incr(Metric) ->
     count:incr(gen_key(Metric, timestamp())).
 
@@ -228,33 +204,23 @@ set(Metric, Value, TimeStamp) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-node_register() ->
+node_ping() ->
     try
-        Node = atom_to_binary(node(), utf8),
-        fredis:excute_retry(["SETEX", <<"falcon_", Node/binary>>, ?REDIS_NODE_EXPIRED, Node], ?FALCON_REDIS_RETRY)
+        Nodes = lists:usort(?FALCON_NODES ++ nodes()),
+        lists:foreach(fun(N) -> case net_adm:ping(N) of
+                                    pong ->
+                                        ok;
+                                    R ->
+                                        error_logger:warning_msg("node_ping:~p, result:~p, ", [N, R])
+                                end end, Nodes)
     catch
         E:R ->
-            error_logger:error_msg("node_register error:~p, reason:~p", [E, R])
+            error_logger:error_msg("node_ping error:~p, reason:~p", [E, R])
     end.
 
 check_leader() ->
-    try
-        case ?ENDPOINT of
-            undefined ->
-                %按照节点上报
-                true;
-            _EndPoint ->
-                [Service, _Info] = binary:split(atom_to_binary(node(), utf8), <<"@">>),
-                Result = eredis_cluster:qa(["KEYS", <<"falcon_", Service/binary, "*">>]),
-                Node = atom_to_binary(node(), utf8),
-                <<"falcon_", Node/binary>> == lists:last(lists:sort(lists:foldl(fun(Tuple, Acc) -> {ok, L} = Tuple,
-                    Acc ++ L end, [], Result)))
-        end
-    catch
-        E:R ->
-            error_logger:error_msg("check_leader error:~p, reason:~p", [E, R]),
-            false
-    end.
+    Nodes = nodes(),
+    node() == lists:last(lists:usort([node() | Nodes])).
 
 timestamp() ->
     {M, S, _MS} = os:timestamp(),
