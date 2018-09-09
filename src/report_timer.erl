@@ -197,7 +197,7 @@ timer_handle(#{metric := Metric, type := Type, report_time := RTime, module := M
     end.
 
 reflush_cache(Metric, RTime, Type, RTime) ->
-    CurrentTime = timestamp() - RTime,
+    CurrentTime = timestamp() - 2 * RTime,
     EKey = gen_key(Metric, CurrentTime),
     case count:get(EKey) of
         [] ->
@@ -330,8 +330,8 @@ gen_key(Key, TimeStamp) ->
     <<Prefix/binary, "_", Key/binary, "_", Date/binary>>.
 
 default_callback(Metric, ReportTime, Args) ->
-    %考虑集群中节点上报周期差值，当前事件上报两周期前的数据
-    LastTimeStamp = timestamp() - 2 * ReportTime,
+    %考虑集群中节点上报周期差值，当前事件上报三个周期前的数据
+    LastTimeStamp = timestamp() - 3 * ReportTime,
     SaveKey = gen_key(Metric, LastTimeStamp),
     {ok, Value} = fredis:excute_retry(["GET", SaveKey], ?FALCON_REDIS_RETRY),
     {LastTimeStamp, convert_value(Value), Args}.
