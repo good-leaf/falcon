@@ -17,7 +17,8 @@
 -export([
 	timer_expiry/1,
 	task_callback/3,
-	timer_handle/1
+	timer_handle/1,
+	async_report/5
 ]).
 
 -define(SERVER, ?MODULE).
@@ -180,10 +181,7 @@ timer_handle(#{task_name := TaskName, report_time := RTime, module := Module,
 	try
 		case cfalcon:check_leader() of
 			true ->
-				ReportList = Module:Function(TaskName, RTime, Args),
-				lists:foreach(fun({Metric, TimeStamp, Value, Tags}) ->
-					report_timer:report(Metric, TimeStamp, Value, report_timer:generate_tags(Tags), RTime)
-				              end, ReportList);
+				spawn(?MODULE, async_report, [TaskName, RTime, Args, Module, Function]);
 			false ->
 				ignore
 		end
@@ -191,6 +189,13 @@ timer_handle(#{task_name := TaskName, report_time := RTime, module := Module,
 		E:R ->
 			error_logger:error_msg("timer_handle error:~p, reason:~p, bt:~p", [E, R, erlang:get_stacktrace()])
 	end.
+
+async_report(TaskName, RTime, Module, Function, Args) ->
+	ReportList = Module:Function(TaskName, RTime, Args),
+	lists:foreach(fun({Metric, TimeStamp, Value, Tags}) ->
+		report_timer:report(Metric, TimeStamp, Value, report_timer:generate_tags(Tags), RTime)
+	              end, ReportList).
+
 
 %cfalcon:task_register(<<"task">>, 60, task_timer, task_callback, [{<<"env">>, <<"dev">>}])
 task_callback(_TaskName, _RTime, Args) ->
