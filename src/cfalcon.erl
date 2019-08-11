@@ -28,6 +28,7 @@
 	check_leader/0,
 	metric_register/4,
 	metric_register/6,
+	task_register/5,
 	get_nodes1/0,
 	get_nodes/0
 ]).
@@ -180,8 +181,24 @@ metric_register(Metric, Type, ReportTime, CallBackModule, CallBackFun, CallBackA
 	end.
 
 -spec metric_register(binary(), binary(), integer(), list()) -> any().
-metric_register(Metric, Type, ReportTime, CallBackArgs) ->
-	metric_register(Metric, Type, ReportTime, report_timer, default_callback, CallBackArgs).
+metric_register(TaskName, Type, ReportTime, CallBackArgs) ->
+	metric_register(TaskName, Type, ReportTime, report_timer, default_callback, CallBackArgs).
+
+-spec task_register(binary(), integer(), atom(), atom(), list()) -> any().
+task_register(TaskName, ReportTime, CallBackModule, CallBackFun, CallBackArgs) ->
+	AtomMetric = binary_to_atom(TaskName, utf8),
+	case whereis(AtomMetric) of
+		undefined ->
+			task_sup:start_child(TaskName, ReportTime, CallBackModule, CallBackFun, CallBackArgs);
+		Pid when is_pid(Pid) ->
+			case is_process_alive(Pid) of
+				true ->
+					ok;
+				false ->
+					task_sup:start_child(TaskName, ReportTime, CallBackModule, CallBackFun, CallBackArgs)
+			end
+	end.
+
 
 gen_key(Metric) ->
 	report_timer:gen_key(Metric).
@@ -245,7 +262,7 @@ get_nodes1() ->
 			        _Payload ->
 				        []
 		        end,
-		AtomNodes = lists:foldl(fun(N, Anodes) -> [binary_to_atom(N, utf8)| Anodes]end, [], Nodes),
+		AtomNodes = lists:foldl(fun(N, Anodes) -> [binary_to_atom(N, utf8) | Anodes] end, [], Nodes),
 		lists:foldl(fun(RemoteNode, Acc) ->
 			[RemoteNodePrefix | _RemoteNodeTail] = binary:split(atom_to_binary(RemoteNode, utf8), <<"@">>),
 			case RemoteNodePrefix == NodePrefix of
