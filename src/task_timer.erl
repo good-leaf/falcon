@@ -181,7 +181,7 @@ timer_handle(#{task_name := TaskName, report_time := RTime, module := Module,
 	try
 		case cfalcon:check_leader() of
 			true ->
-				spawn(?MODULE, async_report, [TaskName, RTime, Args, Module, Function]);
+				spawn(?MODULE, async_report, [TaskName, RTime, Module, Function, Args]);
 			false ->
 				ignore
 		end
