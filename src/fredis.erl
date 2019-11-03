@@ -4,7 +4,8 @@
     excute/1,
     qp_excute/1,
     qpexcute_retry/2,
-    excute_retry/2
+    excute_retry/2,
+    multi_list_to_tuple/2
 ]).
 
 qp_excute(Cmd) ->
@@ -56,3 +57,11 @@ excute_retry(Cmd, Retry) ->
         Payload ->
             Payload
     end.
+
+%[a,b,c,d] -> [{a,b},{c,d}]
+multi_list_to_tuple([], Acc) ->
+    Acc;
+multi_list_to_tuple(DataList, Acc) ->
+    [K, V|List] = DataList,
+    NewAcc = [{K, V}] ++ Acc,
+    multi_list_to_tuple(List, NewAcc).

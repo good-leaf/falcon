@@ -39,6 +39,8 @@
 	ptest/1]).
 -define(SERVER, ?MODULE).
 
+-define(REGISTER_TIME, 3 * ?PING_TIMEVAL).
+-define(REGISTER_KEY(Service), <<Service/binary, "-list">>).
 -record(state, {}).
 
 %%%===================================================================
@@ -76,10 +78,31 @@ start_link() ->
 	{stop, Reason :: term()} | ignore).
 init([]) ->
 	%%注册
-	Node = atom_to_binary(node(), utf8),
-	fredis:excute(["SET", <<Node/binary>>, 1]),
+	node_register(),
 	erlang:send_after(10, ?SERVER, node_ping),
 	{ok, #state{}}.
+
+node_register() ->
+	Node = atom_to_binary(node(), utf8),
+	[Service, _IP] = binary:split(Node, <<"@">>, [global]),
+	fredis:excute(["HSET", ?REGISTER_KEY(Service), <<Node/binary>>, milltimestamp()]).
+
+node_list() ->
+	Node = atom_to_binary(node(), utf8),
+	[Service, _IP] = binary:split(Node, <<"@">>, [global]),
+	case eredis_cluster:q(["HGETALL", ?REGISTER_KEY(Service)]) of
+		{ok, Payload} when is_list(Payload) ->
+			AllNodes = fredis:multi_list_to_tuple(Payload, []),
+			lists:foldl(fun({N, V}, Acc) ->
+				case (milltimestamp() - binary_to_integer(V)) < 3 * ?PING_TIMEVAL of
+					true -> [N|Acc];
+					false ->
+						eredis_cluster:q(["HDEL", ?REGISTER_KEY(Service), N]),
+						Acc
+				end end, [], AllNodes);
+		_Payload ->
+			[]
+	end.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -228,6 +251,9 @@ set(Metric, Value, TimeStamp) ->
 %%%===================================================================
 node_ping() ->
 	try
+		%%注册
+		node_register(),
+
 		Nodes = get_nodes1(),
 		AliveNodes = lists:foldl(fun(N, Acc) -> case net_adm:ping(N) of
 			                                        pong ->
@@ -256,13 +282,7 @@ get_nodes() ->
 get_nodes1() ->
 	try
 		[NodePrefix | _NodeTail] = binary:split(atom_to_binary(node(), utf8), <<"@">>),
-		Nodes = case eredis_cluster:qa(["KEYS", <<NodePrefix/binary, "@*">>]) of
-			        Payload when is_list(Payload) ->
-				        lists:foldl(fun(T, N) -> case T of {ok, L} -> N ++ L;_R -> N end end, [], Payload);
-			        _Payload ->
-				        []
-		        end,
-		AtomNodes = lists:foldl(fun(N, Anodes) -> [binary_to_atom(N, utf8) | Anodes] end, [], Nodes),
+		AtomNodes = lists:foldl(fun(N, Anodes) -> [binary_to_atom(N, utf8) | Anodes] end, [], node_list()),
 		lists:foldl(fun(RemoteNode, Acc) ->
 			[RemoteNodePrefix | _RemoteNodeTail] = binary:split(atom_to_binary(RemoteNode, utf8), <<"@">>),
 			case RemoteNodePrefix == NodePrefix of
@@ -289,6 +309,10 @@ timestamp() ->
 umilltimestamp() ->
 	{M, S, MS} = os:timestamp(),
 	M * 1000000000000 + S * 1000000 + MS.
+
+milltimestamp() ->
+	{M, S, MS} = os:timestamp(),
+	M * 1000000000 + S * 1000 + MS div 1000.
 
 generate_uuid() ->
 	Bin = crypto:strong_rand_bytes(12),
